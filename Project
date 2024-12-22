@@ -1,0 +1,111 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+import torch
+
+# Define the Model class as a custom neural network
+class Model(torch.nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+        self.elu = torch.nn.ELU()
+        self.sigmoid = torch.nn.Sigmoid()
+        self.dense1 = torch.nn.Linear(4, 5)
+        self.dense2 = torch.nn.Linear(5, 1)  # returns one value in [0,1]
+
+    def forward(self, x):
+        x = self.elu(self.dense1(x))
+        return self.sigmoid(self.dense2(x))
+
+# Instantiate the Model
+model = Model()
+
+# Load dataset
+try:
+    data = pd.read_csv('insurance.csv')
+except FileNotFoundError:
+    print("Error: 'insurance_data.csv' not found. Please ensure the file is in the correct directory.")
+    exit()
+
+# Calculate average premium
+average_premium = data['charges'].mean()
+
+# Add HighRisk and LowRisk columns based on the average premium
+data['RiskCategory'] = data['charges'].apply(
+    lambda x: 'HighRisk' if x > average_premium else 'LowRisk'
+)
+
+# Save updated CSV file with RiskCategory column
+data.to_csv('insurance_data_with_risk.csv', index=False)
+
+# Preprocess dataset (assuming columns include age, bmi, smoker, region, charges, RiskCategory)
+data['smoker'] = data['smoker'].map({'yes': 1, 'no': 0})
+data = pd.get_dummies(data, columns=['region'], drop_first=True)
+
+# Define features and target
+X = data.drop(['charges', 'RiskCategory'], axis=1)
+y = data['RiskCategory'].map({'HighRisk': 1, 'LowRisk': 0})
+
+# Ensure no non-numeric columns exist in X
+X = X.apply(pd.to_numeric, errors='coerce')
+X = X.fillna(0)  # Replace any NaN values with 0
+
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Convert data to PyTorch tensors
+X_train_tensor = torch.tensor(X_train.values, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train.values, dtype=torch.float32).unsqueeze(1)
+X_test_tensor = torch.tensor(X_test.values, dtype=torch.float32)
+
+def train_model(model, X_train, y_train, epochs=100, learning_rate=0.001):
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = torch.nn.BCELoss()
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        predictions = model(X_train)
+        loss = criterion(predictions, y_train)
+        loss.backward()
+        optimizer.step()
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.item()}")
+
+# Train the model
+train_model(model, X_train_tensor, y_train_tensor)
+
+# Evaluate the model
+with torch.no_grad():
+    predictions = model(X_test_tensor).round().numpy()
+
+# Logistic Regression
+logreg = LogisticRegression()
+logreg.fit(X_train, y_train)
+logreg_preds = logreg.predict(X_test)
+
+# Gradient Boosting
+gbc = GradientBoostingClassifier()
+gbc.fit(X_train, y_train)
+gbc_preds = gbc.predict(X_test)
+
+# Evaluation
+print("Custom Model Results:")
+print(classification_report(y_test, predictions))
+
+print("Logistic Regression Results:")
+print(classification_report(y_test, logreg_preds))
+
+print("Gradient Boosting Results:")
+print(classification_report(y_test, gbc_preds))
+
+# Unified Framework Summary
+results = {
+    'Custom Model': accuracy_score(y_test, predictions),
+    'Logistic Regression': accuracy_score(y_test, logreg_preds),
+    'Gradient Boosting': accuracy_score(y_test, gbc_preds)
+}
+
+print("Model Comparison:", results)
